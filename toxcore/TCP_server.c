@@ -95,10 +95,95 @@ struct TCP_Server {
 
     /* Network profile for all TCP server packets. */
     Net_Profile *net_profile;
+
+    /* Access control fields */
+    uint8_t **whitelist_pks;          // Array of whitelisted public keys
+    uint16_t whitelist_count;         // Number of whitelisted keys
+    uint16_t whitelist_capacity;      // Max capacity of whitelist
+    bool access_control_enabled;      // Whether to enforce access control
 };
 
 static_assert(sizeof(TCP_Server) < 7 * 1024 * 1024,
               "TCP_Server struct should not grow more; it's already 6MB");
+
+/* Whitelist management functions */
+
+bool tcp_server_add_to_whitelist(TCP_Server *tcp_server, const uint8_t *public_key)
+{
+    if (!tcp_server->access_control_enabled) {
+        return true; // If access control is disabled, all are allowed
+    }
+
+    // Check if already in whitelist
+    for (uint16_t i = 0; i < tcp_server->whitelist_count; ++i) {
+        if (pk_equal(tcp_server->whitelist_pks[i], public_key)) {
+            return true; // Already in whitelist
+        }
+    }
+
+    // Expand if needed
+    if (tcp_server->whitelist_count >= tcp_server->whitelist_capacity) {
+        const uint16_t new_capacity = tcp_server->whitelist_capacity * 2;
+        uint8_t **new_list = (uint8_t **)mem_vrealloc(tcp_server->mem, tcp_server->whitelist_pks,
+                                                      new_capacity, sizeof(uint8_t*));
+
+        if (new_list == nullptr) {
+            return false; // Memory allocation failed
+        }
+
+        tcp_server->whitelist_pks = new_list;
+        tcp_server->whitelist_capacity = new_capacity;
+    }
+
+    // Add new key
+    tcp_server->whitelist_pks[tcp_server->whitelist_count] = (uint8_t *)mem_alloc(tcp_server->mem, CRYPTO_PUBLIC_KEY_SIZE);
+    if (tcp_server->whitelist_pks[tcp_server->whitelist_count] == nullptr) {
+        return false; // Memory allocation failed
+    }
+    memcpy(tcp_server->whitelist_pks[tcp_server->whitelist_count], public_key, CRYPTO_PUBLIC_KEY_SIZE);
+    ++tcp_server->whitelist_count;
+
+    return true;
+}
+
+bool tcp_server_remove_from_whitelist(TCP_Server *tcp_server, const uint8_t *public_key)
+{
+    for (uint16_t i = 0; i < tcp_server->whitelist_count; ++i) {
+        if (pk_equal(tcp_server->whitelist_pks[i], public_key)) {
+            // Free memory for the key being removed
+            mem_delete(tcp_server->mem, tcp_server->whitelist_pks[i]);
+
+            // Move last element to this position if we're not removing the last element
+            if (i < tcp_server->whitelist_count - 1) {
+                tcp_server->whitelist_pks[i] = tcp_server->whitelist_pks[tcp_server->whitelist_count - 1];
+            }
+            --tcp_server->whitelist_count;
+
+            return true;
+        }
+    }
+    return false; // Not found
+}
+
+bool tcp_server_is_whitelisted(const TCP_Server *tcp_server, const uint8_t *public_key)
+{
+    if (!tcp_server->access_control_enabled) {
+        return true; // If access control is disabled, all are allowed
+    }
+
+    for (uint16_t i = 0; i < tcp_server->whitelist_count; ++i) {
+        if (pk_equal(tcp_server->whitelist_pks[i], public_key)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void tcp_server_set_access_control_enabled(TCP_Server *tcp_server, bool enabled)
+{
+    tcp_server->access_control_enabled = enabled;
+}
 
 const uint8_t *tcp_server_public_key(const TCP_Server *tcp_server)
 {
@@ -309,7 +394,8 @@ static int kill_accepted(TCP_Server *tcp_server, int index)
  * @retval 1 if everything went well.
  * @retval -1 if the connection must be killed.
  */
-static int handle_tcp_handshake(const Logger *_Nonnull logger, TCP_Secure_Connection *_Nonnull con, const uint8_t *_Nonnull data, uint16_t length, const uint8_t *_Nonnull self_secret_key)
+static int handle_tcp_handshake(const Logger *_Nonnull logger, TCP_Server *_Nonnull tcp_server,
+                                TCP_Secure_Connection *_Nonnull con, const uint8_t *_Nonnull data, uint16_t length, const uint8_t *_Nonnull self_secret_key)
 {
     if (length != TCP_CLIENT_HANDSHAKE_SIZE) {
         LOGGER_ERROR(logger, "invalid handshake length: %d != %d", length, TCP_CLIENT_HANDSHAKE_SIZE);
@@ -319,6 +405,18 @@ static int handle_tcp_handshake(const Logger *_Nonnull logger, TCP_Secure_Connec
     if (con->status != TCP_STATUS_CONNECTED) {
         LOGGER_ERROR(logger, "TCP connection %u not connected", (unsigned int)con->identifier);
         return -1;
+    }
+
+    // Extract the client's public key from the handshake data
+    const uint8_t *client_public_key = data; // First CRYPTO_PUBLIC_KEY_SIZE bytes are the public key
+
+    // Check if the client's public key is in our whitelist (if access control is enabled)
+    if (tcp_server->access_control_enabled) {
+        if (!tcp_server_is_whitelisted(tcp_server, client_public_key)) {
+            LOGGER_INFO(logger, "Rejecting connection from non-whitelisted client: %02x%02x%02x...",
+                        client_public_key[0], client_public_key[1], client_public_key[2]);
+            return -1; // Reject the connection
+        }
     }
 
     uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE];
@@ -372,7 +470,8 @@ static int handle_tcp_handshake(const Logger *_Nonnull logger, TCP_Secure_Connec
  * @retval 0 if we didn't get it yet.
  * @retval -1 if the connection must be killed.
  */
-static int read_connection_handshake(const Logger *_Nonnull logger, TCP_Secure_Connection *_Nonnull con, const uint8_t *_Nonnull self_secret_key)
+static int read_connection_handshake(const Logger *_Nonnull logger, TCP_Server *_Nonnull tcp_server,
+                                     TCP_Secure_Connection *_Nonnull con, const uint8_t *_Nonnull self_secret_key)
 {
     uint8_t data[TCP_CLIENT_HANDSHAKE_SIZE];
     const int len = read_tcp_packet(logger, con->con.mem, con->con.ns, con->con.sock, data, TCP_CLIENT_HANDSHAKE_SIZE, &con->con.ip_port);
@@ -382,7 +481,7 @@ static int read_connection_handshake(const Logger *_Nonnull logger, TCP_Secure_C
         return 0;
     }
 
-    return handle_tcp_handshake(logger, con, data, len, self_secret_key);
+    return handle_tcp_handshake(logger, tcp_server, con, data, len, self_secret_key);
 }
 
 /**
@@ -1033,6 +1132,19 @@ TCP_Server *new_tcp_server(const Logger *logger, const Memory *mem, const Random
 
     bs_list_init(&temp->accepted_key_list, mem, CRYPTO_PUBLIC_KEY_SIZE, 8, memcmp);
 
+    // Initialize whitelist
+    temp->whitelist_pks = (uint8_t **)mem_valloc(mem, 8, sizeof(uint8_t*)); // Start with capacity 8
+    if (temp->whitelist_pks == nullptr) {
+        // Cleanup and return error
+        netprof_kill(mem, temp->net_profile);
+        mem_delete(mem, temp->socks_listening);
+        mem_delete(mem, temp);
+        return nullptr;
+    }
+    temp->whitelist_count = 0;
+    temp->whitelist_capacity = 8;
+    temp->access_control_enabled = false;  // Default to disabled for backward compatibility
+
     return temp;
 }
 
@@ -1062,10 +1174,10 @@ static int do_incoming(TCP_Server *_Nonnull tcp_server, uint32_t i)
 
     LOGGER_TRACE(tcp_server->logger, "handling incoming TCP connection %u", i);
 
-    const int ret = read_connection_handshake(tcp_server->logger, conn, tcp_server->secret_key);
+    const int ret = read_connection_handshake(tcp_server->logger, tcp_server, conn, tcp_server->secret_key);
 
     if (ret == -1) {
-        LOGGER_TRACE(tcp_server->logger, "incoming connection %u dropped due to failed handshake", i);
+        LOGGER_TRACE(tcp_server->logger, "incoming connection %u dropped during whitelist check/handshake", i);
         kill_tcp_secure_connection(conn);
         return -1;
     }
@@ -1389,6 +1501,18 @@ void kill_tcp_server(TCP_Server *tcp_server)
     }
 
     bs_list_free(&tcp_server->accepted_key_list);
+
+    // Free all whitelisted public keys
+    for (uint16_t i = 0; i < tcp_server->whitelist_count; ++i) {
+        if (tcp_server->whitelist_pks[i] != nullptr) {
+            mem_delete(tcp_server->mem, tcp_server->whitelist_pks[i]);
+        }
+    }
+
+    // Free the whitelist array itself
+    if (tcp_server->whitelist_pks != nullptr) {
+        mem_delete(tcp_server->mem, tcp_server->whitelist_pks);
+    }
 
 #ifdef TCP_SERVER_USE_EPOLL
     close(tcp_server->efd);

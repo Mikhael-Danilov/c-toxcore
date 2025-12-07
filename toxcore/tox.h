@@ -573,6 +573,34 @@ bool tox_bootstrap(Tox *tox, const char *host, uint16_t port, const uint8_t publ
 bool tox_add_tcp_relay(Tox *tox, const char *host, uint16_t port, const uint8_t public_key[TOX_PUBLIC_KEY_SIZE], Tox_Err_Bootstrap *error);
 
 /**
+ * @brief Add a public key to the TCP relay whitelist.
+ * This is only relevant if the instance is acting as a TCP relay.
+ *
+ * @param public_key The long term public key of the client to whitelist
+ *   (TOX_PUBLIC_KEY_SIZE bytes).
+ * @return true on success.
+ */
+bool tox_add_tcp_relay_to_whitelist(Tox *tox, const uint8_t public_key[TOX_PUBLIC_KEY_SIZE]);
+
+/**
+ * @brief Remove a public key from the TCP relay whitelist.
+ * This is only relevant if the instance is acting as a TCP relay.
+ *
+ * @param public_key The long term public key of the client to remove from whitelist
+ *   (TOX_PUBLIC_KEY_SIZE bytes).
+ * @return true on success.
+ */
+bool tox_remove_tcp_relay_from_whitelist(Tox *tox, const uint8_t public_key[TOX_PUBLIC_KEY_SIZE]);
+
+/**
+ * @brief Enable or disable access control for TCP relay connections.
+ * This is only relevant if the instance is acting as a TCP relay.
+ *
+ * @param enabled Whether access control should be enabled.
+ */
+void tox_set_tcp_relay_access_control_enabled(Tox *tox, bool enabled);
+
+/**
  * @brief Protocols that can be used to connect to the network or friends.
  */
 typedef enum Tox_Connection {

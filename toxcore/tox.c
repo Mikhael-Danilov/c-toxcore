@@ -1160,6 +1160,43 @@ bool tox_add_tcp_relay(Tox *tox, const char *host, uint16_t port, const uint8_t 
     return true;
 }
 
+bool tox_add_tcp_relay_to_whitelist(Tox *tox, const uint8_t public_key[TOX_PUBLIC_KEY_SIZE])
+{
+    if (tox->m->tcp_server == nullptr) {
+        return false;  // No TCP server running
+    }
+
+    tox_lock(tox);
+    bool result = tcp_server_add_to_whitelist(tox->m->tcp_server, public_key);
+    tox_unlock(tox);
+
+    return result;
+}
+
+bool tox_remove_tcp_relay_from_whitelist(Tox *tox, const uint8_t public_key[TOX_PUBLIC_KEY_SIZE])
+{
+    if (tox->m->tcp_server == nullptr) {
+        return false;  // No TCP server running
+    }
+
+    tox_lock(tox);
+    bool result = tcp_server_remove_from_whitelist(tox->m->tcp_server, public_key);
+    tox_unlock(tox);
+
+    return result;
+}
+
+void tox_set_tcp_relay_access_control_enabled(Tox *tox, bool enabled)
+{
+    if (tox->m->tcp_server == nullptr) {
+        return;  // No TCP server running
+    }
+
+    tox_lock(tox);
+    tcp_server_set_access_control_enabled(tox->m->tcp_server, enabled);
+    tox_unlock(tox);
+}
+
 Tox_Connection tox_self_get_connection_status(const Tox *tox)
 {
     assert(tox != nullptr);

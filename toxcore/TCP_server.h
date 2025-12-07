@@ -51,4 +51,17 @@ void kill_tcp_server(TCP_Server *_Nullable tcp_server);
  * Returns null if `tcp_server` is null.
  */
 const Net_Profile *_Nullable tcp_server_get_net_profile(const TCP_Server *_Nullable tcp_server);
+
+/** Add a public key to the TCP relay whitelist */
+bool tcp_server_add_to_whitelist(TCP_Server *tcp_server, const uint8_t *public_key);
+
+/** Remove a public key from the TCP relay whitelist */
+bool tcp_server_remove_from_whitelist(TCP_Server *tcp_server, const uint8_t *public_key);
+
+/** Set whether access control is enabled */
+void tcp_server_set_access_control_enabled(TCP_Server *tcp_server, bool enabled);
+
+/** Check if a public key is whitelisted */
+bool tcp_server_is_whitelisted(const TCP_Server *tcp_server, const uint8_t *public_key);
+
 #endif /* C_TOXCORE_TOXCORE_TCP_SERVER_H */
