@@ -410,13 +410,24 @@ static int handle_tcp_handshake(const Logger *_Nonnull logger, TCP_Server *_Nonn
     // Extract the client's public key from the handshake data
     const uint8_t *client_public_key = data; // First CRYPTO_PUBLIC_KEY_SIZE bytes are the public key
 
+    // Format IP and port for logging
+    Ip_Ntoa ip_str;
+    const char *ip_str_ptr = net_ip_ntoa(&con->con.ip_port.ip, &ip_str);
+    uint16_t port = net_ntohs(con->con.ip_port.port);
+
     // Check if the client's public key is in our whitelist (if access control is enabled)
     if (tcp_server->access_control_enabled) {
         if (!tcp_server_is_whitelisted(tcp_server, client_public_key)) {
-            LOGGER_INFO(logger, "Rejecting connection from non-whitelisted client: %02x%02x%02x...",
-                        client_public_key[0], client_public_key[1], client_public_key[2]);
+            LOGGER_INFO(logger, "DENY connection attempt from IP: %s:%u, client: %02x%02x%02x...",
+                        ip_str_ptr, port, client_public_key[0], client_public_key[1], client_public_key[2]);
             return -1; // Reject the connection
+        } else {
+            LOGGER_INFO(logger, "ALLOW connection from IP: %s:%u, client: %02x%02x%02x...",
+                        ip_str_ptr, port, client_public_key[0], client_public_key[1], client_public_key[2]);
         }
+    } else {
+        LOGGER_INFO(logger, "ALLOW connection from IP: %s:%u, client: %02x%02x%02x... (ACL disabled)",
+                    ip_str_ptr, port, client_public_key[0], client_public_key[1], client_public_key[2]);
     }
 
     uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE];
